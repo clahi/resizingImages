@@ -24,11 +24,27 @@ resource "aws_iam_policy" "lambdaS3Policy" {
     Version : "2012-10-17"
     Statement : [
       {
+        "Effect" : "Allow",
+        "Action" : [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource" : "arn:aws:logs:*:*:*"
+      },
+      {
         Effect : "Allow"
         Action : [
-          "s3:*"
+          "s3:GetObject"
         ]
-        Resource : "*"
+        Resource : "arn:aws:s3:::my-source-bucket-76sdf700/*"
+      },
+      {
+        Effect : "Allow"
+        Action : [
+          "s3:PutObject"
+        ]
+        Resource : "arn:aws:s3:::my-dest-bucket-76sdf700/*"
       }
     ]
   })
@@ -42,7 +58,7 @@ resource "aws_iam_policy_attachment" "lambdaRolePolicyAttachment" {
 
 data "archive_file" "lambdaFile" {
   type        = "zip"
-  source_file = "${path.module}/lambda.py"
+  source_dir  = "${path.module}/lambdaFunction"
   output_path = "${path.module}/lambda.zip"
 }
 
@@ -52,25 +68,31 @@ resource "aws_lambda_function" "resizeImagesLambda" {
   source_code_hash = data.archive_file.lambdaFile.output_base64sha256
   function_name    = "resizeImagesLambda"
   timeout          = 60
-  runtime          = "python3.9"
+  runtime          = "python3.7"
   handler          = "lambda.lambda_handler"
+
+  environment {
+    variables = {
+      DEST_BUCKET = aws_s3_bucket.myDestiBucket.id
+    }
+  }
 }
 
-# resource "aws_cloudwatch_event_rule" "resizeEventRule" {
-#   name        = "resizeEventRule"
-#   description = "Rule to trigger lambda to resize any image uploaded to S3"
+resource "aws_lambda_permission" "resizeImagePermission" {
+  statement_id  = "AllowExecutionFromS3Bucket"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.resizeImagesLambda.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.mySourceBucket.arn
+}
 
-# }
+resource "aws_s3_bucket_notification" "bucketNotification" {
+  bucket = aws_s3_bucket.mySourceBucket.id
 
-# resource "aws_cloudwatch_event_target" "resizeEventRuleTarget" {
-#   rule      = aws_cloudwatch_event_rule.resizeEventRule.name
-#   arn       = aws_lambda_function.resizeImagesLambda.arn
-#   target_id = "resizeEventRuleTarget"
-# }
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.resizeImagesLambda.arn
+    events              = ["s3:ObjectCreated:*"]
+  }
 
-# resource "aws_lambda_permission" "resizeImagePermission" {
-#   action        = "lambda:InvokeFunction"
-#   function_name = aws_lambda_function.resizeImagesLambda.function_name
-#   principal     = "events.amazonaws.com"
-#   source_arn    = aws_cloudwatch_event_rule.resizeEventRule.arn
-# }
+  depends_on = [aws_lambda_permission.resizeImagePermission]
+}
